@@ -1,116 +1,115 @@
 from flask import Flask, request, jsonify
-import sqlite3
 from flask_cors import CORS
-from datetime import datetime
+import sqlite3
 import os
 
 app = Flask(__name__)
 CORS(app)
 
-DB_NAME = "/mnt/data/database.db"  # Permanent storage on Railway
+# Ensure persistent storage directory exists in Railway
+DB_PATH = "/mnt/data"
+os.makedirs(DB_PATH, exist_ok=True)
 
-# Create table with all fields
+# Full DB path
+DB_NAME = os.path.join(DB_PATH, "database.db")
+
+
+# Function to initialize database
 def init_db():
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT,
-            weight REAL,
-            gym_attendance TEXT,
-            workout_type TEXT,
-            mood TEXT
-        )
-    ''')
+    cursor = conn.cursor()
+    cursor.execute('''CREATE TABLE IF NOT EXISTS gym_tracker (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT NOT NULL,
+                        weight REAL NOT NULL,
+                        gym_attendance TEXT NOT NULL,
+                        workout_type TEXT,
+                        mood TEXT
+                    )''')
     conn.commit()
     conn.close()
 
-init_db()
 
-@app.route("/add", methods=["POST"])
-def add_entry():
-    data = request.json
-    date = data.get("date", datetime.now().strftime("%Y-%m-%d"))
-    weight = float(data["weight"])
-    gym_attendance = data["gym_attendance"]
-    workout_type = data.get("workout_type")
-    mood = data.get("mood")
-
+# Get all entries
+@app.route("/records", methods=["GET"])
+def get_records():
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO entries (date, weight, gym_attendance, workout_type, mood)
-        VALUES (?, ?, ?, ?, ?)
-    """, (date, weight, gym_attendance, workout_type, mood))
-    conn.commit()
-    conn.close()
-    return jsonify({"message": "Entry added!"})
-
-@app.route("/get", methods=["GET"])
-def get_entries():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT * FROM entries ORDER BY date ASC")
-    rows = c.fetchall()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM gym_tracker ORDER BY date DESC")
+    rows = cursor.fetchall()
     conn.close()
 
-    entries = [
-        {
-            "id": r[0],
-            "date": r[1],
-            "weight": r[2],
-            "gym_attendance": r[3],
-            "workout_type": r[4],
-            "mood": r[5]
-        }
-        for r in rows
-    ]
-    return jsonify(entries)
+    data = []
+    for row in rows:
+        data.append({
+            "id": row["id"],
+            "date": row["date"],
+            "weight": float(row["weight"]),  # Keep decimal precision
+            "gym_attendance": row["gym_attendance"],
+            "workout_type": row["workout_type"],
+            "mood": row["mood"]
+        })
+    return jsonify(data)
 
-@app.route("/update/<int:entry_id>", methods=["PUT"])
-def update_entry(entry_id):
-    data = request.json
+
+# Add a new record
+@app.route("/records", methods=["POST"])
+def add_record():
+    data = request.get_json()
     date = data.get("date")
     weight = data.get("weight")
-    gym = data.get("gym_attendance")
+    gym_attendance = data.get("gym_attendance")
     workout_type = data.get("workout_type")
     mood = data.get("mood")
 
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    if date:
-        c.execute("UPDATE entries SET date=? WHERE id=?", (date, entry_id))
-    if weight is not None:
-        c.execute("UPDATE entries SET weight=? WHERE id=?", (float(weight), entry_id))
-    if gym:
-        c.execute("UPDATE entries SET gym_attendance=? WHERE id=?", (gym, entry_id))
-    if workout_type is not None:
-        c.execute("UPDATE entries SET workout_type=? WHERE id=?", (workout_type, entry_id))
-    if mood is not None:
-        c.execute("UPDATE entries SET mood=? WHERE id=?", (mood, entry_id))
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO gym_tracker (date, weight, gym_attendance, workout_type, mood) VALUES (?, ?, ?, ?, ?)",
+        (date, weight, gym_attendance, workout_type, mood)
+    )
     conn.commit()
     conn.close()
-    return jsonify({"message": "Entry updated!"})
+    return jsonify({"message": "Record added successfully"})
 
-@app.route("/delete/<int:entry_id>", methods=["DELETE"])
-def delete_entry(entry_id):
+
+# Update an existing record
+@app.route("/records/<int:record_id>", methods=["PUT"])
+def update_record(record_id):
+    data = request.get_json()
+    date = data.get("date")
+    weight = data.get("weight")
+    gym_attendance = data.get("gym_attendance")
+    workout_type = data.get("workout_type")
+    mood = data.get("mood")
+
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM entries WHERE id=?", (entry_id,))
+    cursor = conn.cursor()
+    cursor.execute(
+        """UPDATE gym_tracker 
+           SET date=?, weight=?, gym_attendance=?, workout_type=?, mood=? 
+           WHERE id=?""",
+        (date, weight, gym_attendance, workout_type, mood, record_id)
+    )
     conn.commit()
     conn.close()
-    return jsonify({"message": "Entry deleted!"})
+    return jsonify({"message": "Record updated successfully"})
 
-@app.route("/clear-all", methods=["DELETE"])
-def clear_all():
+
+# Delete a record
+@app.route("/records/<int:record_id>", methods=["DELETE"])
+def delete_record(record_id):
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM entries")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM gym_tracker WHERE id=?", (record_id,))
     conn.commit()
     conn.close()
-    return jsonify({"message": "All data cleared!"})
+    return jsonify({"message": "Record deleted successfully"})
 
+
+# Run the app
 if __name__ == "__main__":
+    init_db()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
